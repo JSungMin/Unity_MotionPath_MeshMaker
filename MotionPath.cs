@@ -1,23 +1,31 @@
+/*  Edited by: Sungmin-Jeon
+ *  Date: 2023-02-11
+ *  Description: 기존 MotionPath.cs를 수정하여 Spine SkeletonAnimation에 대응해 사용가능하게 했습니다.
+ */
+
 #if UNITY_EDITOR
 
+using System;
 using System.Collections;
 using System.Collections.Generic;
+using Spine;
+using Spine.Unity;
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.Animations;
+using Random = UnityEngine.Random;
 
 [RequireComponent(typeof(MeshFilter)), RequireComponent(typeof(MeshRenderer))]
 [ExecuteInEditMode]
 public class MotionPath : MonoBehaviour
 {
-    [HideInInspector] public Animator Animator;
+    [HideInInspector] public SkeletonAnimation SkeletonAnimation;
 
     [HideInInspector] public float StartFrame = 0;
     [HideInInspector] public float EndFrame = 60;
     [HideInInspector] public float AnimationSlider;
 
-
-    [HideInInspector] public AnimationClip[] AnimationClips;
+    [HideInInspector] public Spine.ExposedList<Spine.Animation> SpineAnimations;
     [HideInInspector] public string[] AniClipsName;
     [HideInInspector] public int SelectAniClip;
     [HideInInspector] public string PlayStateName; //재생할 스테이트 이름
@@ -129,6 +137,31 @@ public class MotionPath : MonoBehaviour
     {
         SceneView.onSceneGUIDelegate -= DrawSceneGUI;
         Undo.undoRedoPerformed -= MyUndoCallback;
+    }
+
+    public void AsyncCreatePath(PathInfoData pathInfo, Action poseUpdateFunc, Action<List<Vector3>> completeCallback)
+    {
+        System.Threading.Tasks.Task task = CreatePath_Internal(pathInfo, poseUpdateFunc, completeCallback);
+        Debug.Log("AsyncCreatePath Complete");
+    }
+
+    private async System.Threading.Tasks.Task CreatePath_Internal(PathInfoData pathInfo, Action poseUpdateFunc,
+        Action<List<Vector3>> completeCallback)
+    {
+        List<Vector3> newPathPosition = new List<Vector3>(2);
+        float pathDeltaTime = (1f / (float)pathInfo.PathFrame);
+        int SFrame = (int)(StartFrame * pathInfo.PathFrame);
+        int EFrame = (int)(EndFrame * pathInfo.PathFrame);
+        for (float i = SFrame; i < EFrame; ++i)
+        {
+            AnimationSlider = i*pathDeltaTime; //포즈 시간 업데이트
+            // TODO: https://medium.com/c-sharp-progarmming/running-async-code-in-unity-in-edit-mode-d9863cb2726f Async하게 동작하도록 수정해 볼 것
+            pathInfo.TargetObject.transform.hasChanged = true;
+            poseUpdateFunc.Invoke(); //포즈 업데이트
+            await System.Threading.Tasks.Task.Delay(1);
+            newPathPosition.Add(pathInfo.TargetObject.transform.position);
+        }
+        completeCallback.Invoke(newPathPosition);
     }
 
     void MyUndoCallback()
@@ -533,28 +566,11 @@ public class MotionPath_Editor : Editor
 
         //애니메이터 
         EditorGUI.BeginChangeCheck();
-        Ge.Animator = (Animator)EditorGUILayout.ObjectField("Animator", Ge.Animator, typeof(Animator));
-        bool ChangeAniamtor = EditorGUI.EndChangeCheck(); //애니메이터 바뀜
-
-        // //오브젝트
-        // for (int i = 0; i < Ge.PathInfo.Count; i++)
-        // {
-        //     EditorGUI.BeginChangeCheck();
-        //     Ge.PathInfo[i].TargetObject = (GameObject)EditorGUILayout.ObjectField("Target " + "(" + "Path " + (i + 1).ToString() + ")", Ge.PathInfo[i].TargetObject, typeof(GameObject));
-        //     if (EditorGUI.EndChangeCheck())
-        //     {
-        //         if (Ge.PathInfo[i].TargetObject != null)
-        //         {
-        //             //추적 오브젝트 변경 시 패스 재생성
-
-        //             if (Ge.PathInfo[i].AutoUpdate)
-        //             {
-        //                 CreatePath(Ge.PathInfo[i]);
-        //             }
-
-        //         }
-        //     }
-        // }
+        Ge.SkeletonAnimation =
+            (SkeletonAnimation)EditorGUILayout.ObjectField("SkeletonAnimation", Ge.SkeletonAnimation,
+                typeof(SkeletonAnimation));
+        //Ge.Animator = (Animator)EditorGUILayout.ObjectField("Animator", Ge.Animator, typeof(Animator));
+        var ChangeAnimation = EditorGUI.EndChangeCheck(); //애니메이터 바뀜
 
         ///////////////////////////////////////////////////////
         //////////////////      GUI     ///////////////////////
@@ -563,10 +579,8 @@ public class MotionPath_Editor : Editor
 
 
         //애니메이터가 있을 때
-        if (Ge.Animator != null)
+        if (Ge.SkeletonAnimation != null)
         {
-            //Ge.SelectToolbar = GUILayout.Toolbar(Ge.SelectToolbar, Ge.ToolbarName, GUILayout.MinHeight(35));
-
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Add Path"))
             {
@@ -665,20 +679,6 @@ public class MotionPath_Editor : Editor
                     }
                 }
 
-                //패스가 2개 초과일 경우
-                // if (Ge.PathInfo.Count > 2)
-                // {
-                //     GUI.backgroundColor = Color.red * 1.5f;
-                //     if (GUILayout.Button("Remove Path"))
-                //     {
-                //         Ge.PathInfo.RemoveAt(Ge.SelectPath);
-                //         Ge.SelectPath = Mathf.Min(Ge.PathInfo.Count - 1, Ge.SelectPath); //지운게 마지막꺼면
-                //         SceneView.RepaintAll();
-                //         Ge.GenerateMesh(Ge.PathInfo.Count, Ge.CreateMeshInfo.Count_Y, Ge.PathInfo[0].VertexPos.Length);
-                //     }
-                //     GUI.backgroundColor = GUI.color;
-                // }
-
                 //오브젝트 있을 때
                 if (Ge.PathInfo[Ge.SelectPath].TargetObject != null)
                 {
@@ -702,24 +702,6 @@ public class MotionPath_Editor : Editor
             }
 
         }
-
-
-
-        // //패스 리스트들 그리기
-        // void DrawSelectPath_Inspector()
-        // {
-
-
-        //     //패스 GUI
-        //     GUILayout.BeginVertical("GroupBox");
-        //     DrawPathInfo(Ge.PathInfo[Ge.SelectPath]);
-        //     GUILayout.EndVertical();
-
-        //     //패스 To 버텍스위치 GUI
-        //     GUILayout.BeginVertical("GroupBox");
-        //     Viewer_VertexPos(Ge.PathInfo[Ge.SelectPath]);
-        //     GUILayout.EndVertical();
-        // }
 
         //패스 정보
         void DrawPathInfo(MotionPath.PathInfoData GetPathInfo)
@@ -753,25 +735,22 @@ public class MotionPath_Editor : Editor
         {
             if (GetPathInfo.TargetObject != null)
             {
-                float FirstFrame = Ge.AnimationSlider; //현재 포즈 시간 백업
-
-                List<Vector3> NewPathPosition = new List<Vector3>(2);
-                for (float i = Ge.StartFrame; i < Ge.EndFrame; i += (1f / (float)GetPathInfo.PathFrame))
+                float firstFrame = Ge.AnimationSlider; //현재 포즈 시간 백업
+                GetPathInfo.PathPos = Array.Empty<Vector3>(); //패스 초기화
+                
+                Ge.AsyncCreatePath(GetPathInfo, UpdatePos, pathPositions =>
                 {
-                    Ge.AnimationSlider = i; //포즈 시간 업데이트
-                    UpDatePos(); //포즈 업데이트
-                    NewPathPosition.Add(GetPathInfo.TargetObject.transform.position);
-                }
-                GetPathInfo.PathPos = NewPathPosition.ToArray();
+                    GetPathInfo.PathPos = pathPositions.ToArray();
 
-                Ge.AnimationSlider = FirstFrame; //처음 설정한 포즈 시간으로 백업
-                UpDatePos(); //포즈 업데이트
+                    Ge.AnimationSlider = firstFrame; //처음 설정한 포즈 시간으로 백업
+                    UpdatePos(); //포즈 업데이트
 
-                //버텍스 평균 위치값 자동 업데이트
-                if (GetPathInfo.Vertex_AutoUpdate)
-                {
-                    CountVertexPos(GetPathInfo); //버텍스 평균 위치값 업데이트
-                }
+                    //버텍스 평균 위치값 자동 업데이트
+                    if (GetPathInfo.Vertex_AutoUpdate)
+                    {
+                        CountVertexPos(GetPathInfo); //버텍스 평균 위치값 업데이트
+                    }
+                });
             }
         }
 
@@ -800,31 +779,35 @@ public class MotionPath_Editor : Editor
         void DrawAniInfo()
         {
             //애니메이터 바뀜
-            if (ChangeAniamtor)
+            if (ChangeAnimation)
             {
-                Ge.AnimationClips = Ge.Animator.runtimeAnimatorController.animationClips;
-                Ge.AniClipsName = new string[Ge.AnimationClips.Length];
+                Ge.SpineAnimations = Ge.SkeletonAnimation.SkeletonDataAsset.GetSkeletonData(true).Animations;
+                //Ge.AnimationClips = Ge.Animator.runtimeAnimatorController.animationClips;
+                Ge.AniClipsName = new string[Ge.SpineAnimations.Count];
                 for (int i = 0; i < Ge.AniClipsName.Length; i++)
                 {
-                    Ge.AniClipsName[i] = Ge.AnimationClips[i].name;
+                    Ge.AniClipsName[i] = Ge.SpineAnimations.Items[i].Name;
                 }
             }
-
-            float SelectClipLength = Ge.AnimationClips[Ge.SelectAniClip].length; //선택한 클립의 최대 길이
+            
+            if (Ge == null || Ge.SpineAnimations == null || Ge.SpineAnimations.Items.Length == 0)
+            {
+                return;
+            }
+            
+            float SelectClipLength = Ge.SpineAnimations.Items[Ge.SelectAniClip].Duration; //선택한 클립의 최대 길이
 
 
             //플레이할 애니메이션 선택
+            Ge.PlayStateName = Ge.AniClipsName[Ge.SelectAniClip]; //재생할 애니메이션 스테이트 이름 가져오기
             EditorGUI.BeginChangeCheck();
             Ge.SelectAniClip = EditorGUILayout.Popup("재생할 애니메이션", Ge.SelectAniClip, Ge.AniClipsName);
             if (EditorGUI.EndChangeCheck())
             {
                 Debug.Log("애니 변경");
-                Ge.PlayStateName = GetStringFromAniClip(Ge.Animator, Ge.AnimationClips[Ge.SelectAniClip]); //재생할 애니메이션 스테이트 이름 가져오기
+                Ge.PlayStateName = Ge.AniClipsName[Ge.SelectAniClip]; //재생할 애니메이션 스테이트 이름 가져오기
 
-                //시작, 끝 프레임 기본 설정
-                //Ge.StartFrame = 0;
-                //Ge.EndFrame = Ge.AnimationClips[Ge.SelectAniClip].length;
-                UpDatePos();
+                UpdatePos();
 
                 for (int i = 0; i < Ge.PathInfo.Count; i++)
                 {
@@ -867,68 +850,23 @@ public class MotionPath_Editor : Editor
             //포즈 관련된 변수들이 변했을 경우
             if (EditorGUI.EndChangeCheck() || ChangeMinMax)
             {
-                UpDatePos(); //애니메이션 포즈 업데이트
+                UpdatePos(); //애니메이션 포즈 업데이트
             }
         }
 
         //캐릭터 애니메이션 업데이트
-        void UpDatePos()
+        void UpdatePos()
         {
-            Ge.Animator.Play(Ge.PlayStateName, -1, Ge.AnimationSlider);
-            Ge.Animator.Update(Ge.AnimationSlider - 1);
+            Ge.SkeletonAnimation.AnimationName = Ge.PlayStateName;
+            Ge.SkeletonAnimation.Skeleton.SetToSetupPose();
+            foreach (var track in Ge.SkeletonAnimation.AnimationState.Tracks.Items)
+            {
+                track.TrackTime = Ge.AnimationSlider;
+            }
+            Ge.SkeletonAnimation.AnimationState.Apply(Ge.SkeletonAnimation.Skeleton);
+            Ge.SkeletonAnimation.AnimationState.Update(0.01f);
         }
     }
-
-
-    #region 애니메이션 관련 기능
-    AnimatorState[] AllState;
-    //클립으로 애니메이션 스테이트 이름 가져오기 (AnimatorPlay용 String 받아올 때 씀)
-    string GetStringFromAniClip(Animator GetAnimator, AnimationClip Clip)
-    {
-        string OutString = "";
-        AllState = GetAnimatorStates(GetAnimator.runtimeAnimatorController as UnityEditor.Animations.AnimatorController); //모든 스테이트 가져오기   
-        OutString = GetStateFromClip(AllState, Clip).name; //애니메이션 클립으로 부터 State가져 와서 이름 할당
-        return OutString;
-    }
-
-    //모든 애니메이터 스테이트 가져오기
-    AnimatorState[] GetAnimatorStates(UnityEditor.Animations.AnimatorController anicon)
-    {
-        List<AnimatorState> ret = new List<AnimatorState>();
-        foreach (var layer in anicon.layers)
-        {
-            foreach (var subsm in layer.stateMachine.stateMachines)
-            {
-                foreach (var state in subsm.stateMachine.states)
-                {
-                    ret.Add(state.state);
-                }
-            }
-            foreach (var s in layer.stateMachine.states)
-            {
-                ret.Add(s.state);
-            }
-        }
-        return ret.ToArray();
-    }
-
-    //모든 애니메이터 스테이트 중에 애니메이션 클립에 해당하는스테이트 가져오기
-    AnimatorState GetStateFromClip(AnimatorState[] StateList, AnimationClip GetClip)
-    {
-        AnimatorState OutState = null;
-        for (int i = 0; i < StateList.Length; i++)
-        {
-            if (StateList[i].motion == GetClip)
-            {
-                OutState = StateList[i];
-                break; //정지
-            }
-        }
-        return OutState;
-    }
-    #endregion
-
-
 
     //////////////////////////////////////////////////////////////////////
     /////////////////////       VertexVertex      ///////////////////////
